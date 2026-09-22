@@ -12,6 +12,7 @@ class Customer(TimeStampedModel):
     open_date = models.DateField(null=True, blank=True)
     is_active = models.BooleanField(default=True, db_index=True)
     deleted_at = models.DateTimeField(null=True, blank=True)
+    product_languages = models.JSONField(default=list, blank=True)
     def __str__(self): return f"{self.first_name} {self.last_name}"
 
     @property

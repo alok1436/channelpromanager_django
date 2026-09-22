@@ -4,11 +4,19 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.generics import GenericAPIView
 from rest_framework.viewsets import ModelViewSet
+from rest_framework.parsers import MultiPartParser
+from rest_framework import serializers as drf_serializers
+from django.db import transaction
+from drf_spectacular.utils import OpenApiExample, extend_schema
 
 from apps.channels.models import Channel, Marketplace
 from apps.channels.selectors import get_customer_channels
 from apps.channels.serializers import (
     AuthorizationCallbackSerializer,
+    AmazonManualCredentialSerializer,
+    ChannelCredentialStatusSerializer,
+    WooProductImportUploadSerializer,
+    WooProductImportStatusSerializer,
     ChannelCreateSerializer,
     ChannelCredentialUpdateSerializer,
     ChannelMarketplaceSerializer,
@@ -22,7 +30,7 @@ from apps.channels.serializers import (
 )
 from apps.channels.services.amazon_service import build_amazon_authorization_url, complete_amazon_authorization
 from apps.channels.services.channel_service import disconnect_channel, replace_channel_marketplaces
-from apps.channels.services.credential_service import credential_status, set_channel_credentials
+from apps.channels.services.credential_service import credential_status, set_channel_credentials, set_manual_amazon_credentials
 from apps.channels.services.ebay_service import build_ebay_authorization_url, complete_ebay_authorization
 from apps.core.audit import record_audit
 from apps.core.permissions import HasModulePermission, IsSuperAdmin
@@ -38,10 +46,14 @@ class ChannelViewSet(ModelViewSet):
     permission_map = {
         "credential_status": "channels.view",
         "credentials": "channels.credentials",
+        "amazon_credentials": "channels.credentials",
         "marketplaces": "channels.view",
         "update_marketplaces": "channels.update",
         "authorize": "channels.authorize",
         "disconnect": "channels.delete",
+        "sync_orders": "orders.create",
+        "import_woo_products": "products.create",
+        "woo_product_import_status": "products.view",
     }
     filterset_fields = ("company", "platform", "status", "is_active", "country_code")
     search_fields = ("name", "company__name", "vat")
@@ -109,6 +121,49 @@ class ChannelViewSet(ModelViewSet):
         record_audit(request, "credentials_updated", channel, new_values={"configured": True, "platform": channel.platform.code})
         return Response(credential_status(channel))
 
+    @extend_schema(
+        summary="Configure Amazon credentials manually",
+        description=(
+            "Stores seller credentials for this Amazon channel. Use POST or PUT for a complete configuration "
+            "and PATCH to rotate individual values. Tokens are encrypted and never returned."
+        ),
+        request=AmazonManualCredentialSerializer,
+        responses={200: ChannelCredentialStatusSerializer},
+        examples=[
+            OpenApiExample(
+                "Amazon seller credentials",
+                value={"seller_id": "A1EXAMPLESELLER", "refresh_token": "Atzr|..."},
+                request_only=True,
+            ),
+            OpenApiExample(
+                "Configured response",
+                value={
+                    "configured": True,
+                    "platform": "amazon",
+                    "credential_status": "configured",
+                    "updated_at": "2026-09-17T15:42:20Z",
+                },
+                response_only=True,
+                status_codes=("200",),
+            ),
+        ],
+    )
+    @action(detail=True, methods=("post", "put", "patch"), url_path="amazon-credentials")
+    def amazon_credentials(self, request, pk=None):
+        channel = self.get_object()
+        partial = request.method == "PATCH"
+        serializer = AmazonManualCredentialSerializer(
+            data=request.data,
+            partial=partial,
+            context={"channel": channel, "partial": partial},
+        )
+        serializer.is_valid(raise_exception=True)
+        set_manual_amazon_credentials(channel, serializer.validated_data, partial=partial)
+        output = credential_status(channel)
+        audit_output = {**output, "updated_at": output["updated_at"].isoformat() if output["updated_at"] else None}
+        record_audit(request, "amazon_credentials_updated", channel, new_values=audit_output)
+        return Response(output)
+
     @action(detail=True, methods=("get",))
     def marketplaces(self, request, pk=None):
         channel = self.get_object()
@@ -131,6 +186,52 @@ class ChannelViewSet(ModelViewSet):
         if builder is None:
             return Response({"detail": "This platform uses direct credential configuration."}, status=status.HTTP_400_BAD_REQUEST)
         return Response({"platform": channel.platform.code, "authorization_url": builder(channel)})
+
+    @action(detail=True, methods=("post",), url_path="sync-orders")
+    def sync_orders(self, request, pk=None):
+        from apps.orders.services import get_order_service
+
+        channel = self.get_object()
+        result = get_order_service(channel).download_orders()
+        record_audit(request, "orders_synced", channel, new_values=result.as_dict())
+        return Response(result.as_dict())
+
+    @extend_schema(
+        summary="Import WooCommerce products from CSV",
+        request=WooProductImportUploadSerializer,
+        responses={202: WooProductImportStatusSerializer},
+    )
+    @action(detail=True, methods=("post",), url_path="woo-product-import", parser_classes=(MultiPartParser,))
+    def import_woo_products(self, request, pk=None):
+        from apps.products.models import WooProductImport
+        from apps.products.tasks import import_woo_products
+
+        channel = self.get_object()
+        if channel.platform.code != "woocommerce":
+            raise drf_serializers.ValidationError({"channel": "Select a WooCommerce channel."})
+        serializer = WooProductImportUploadSerializer(data=request.data, context={"channel": channel})
+        serializer.is_valid(raise_exception=True)
+        job = WooProductImport.objects.create(
+            customer=channel.customer, channel=channel, warehouse=serializer.validated_data["warehouse"],
+            uploaded_by=request.user, language_code=serializer.validated_data["language_code"],
+            source_file=serializer.validated_data["file"],
+        )
+        transaction.on_commit(lambda: import_woo_products.delay(job.pk))
+        record_audit(request, "woo_product_import_queued", channel, new_values={"import_id": job.pk})
+        return Response(WooProductImportStatusSerializer(job).data, status=status.HTTP_202_ACCEPTED)
+
+    @extend_schema(
+        summary="Check WooCommerce product import",
+        responses={200: WooProductImportStatusSerializer},
+    )
+    @action(detail=True, methods=("get",), url_path=r"woo-product-import/(?P<import_id>\d+)")
+    def woo_product_import_status(self, request, pk=None, import_id=None):
+        from django.shortcuts import get_object_or_404
+        from apps.products.models import WooProductImport
+
+        channel = self.get_object()
+        job = get_object_or_404(WooProductImport, pk=import_id, channel=channel, customer=channel.customer)
+        return Response(WooProductImportStatusSerializer(job).data)
 
 
 class MarketplaceAdminViewSet(ModelViewSet):

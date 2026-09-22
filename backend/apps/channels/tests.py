@@ -5,7 +5,7 @@ from django.core.management import call_command
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
-from apps.channels.models import CdiscountChannelCredential, Channel, ChannelMarketplace
+from apps.channels.models import AmazonChannelCredential, CdiscountChannelCredential, Channel, ChannelMarketplace, ChannelStatus
 from apps.companies.models import Company
 from apps.customers.models import Customer, CustomerMembership
 from apps.permissions.models import Permission
@@ -189,6 +189,46 @@ class ChannelAPITests(TestCase):
         self.assertEqual(status_response.status_code, 200)
         self.assertEqual(status_response.data["credential_status"], "configured")
         self.assertNotIn("client_secret", status_response.data)
+
+    def test_amazon_credentials_can_be_set_manually_for_a_channel(self):
+        self.authenticate(self.owner_a)
+        url = f"/api/v1/channels/{self.channel_a.id}/amazon-credentials/"
+        response = self.client.put(url, {
+            "seller_id": "A1MANUALSELLER",
+            "refresh_token": "Atzr|manual-refresh-token",
+        }, format="json")
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["platform"], "amazon")
+        self.assertEqual(response.data["credential_status"], "configured")
+        self.assertNotIn("refresh_token", response.data)
+        credential = AmazonChannelCredential.objects.get(channel=self.channel_a)
+        self.assertEqual(credential.seller_id, "A1MANUALSELLER")
+        self.assertNotEqual(credential.refresh_token, "Atzr|manual-refresh-token")
+        self.channel_a.refresh_from_db()
+        self.assertEqual(self.channel_a.status, ChannelStatus.ACTIVE)
+        self.assertIsNotNone(self.channel_a.authorized_at)
+
+        patched = self.client.patch(url, {"seller_id": "A1ROTATEDSELLER"}, format="json")
+        self.assertEqual(patched.status_code, 200, patched.data)
+        credential.refresh_from_db()
+        self.assertEqual(credential.seller_id, "A1ROTATEDSELLER")
+        self.assertNotEqual(credential.refresh_token, "Atzr|manual-refresh-token")
+
+    def test_manual_amazon_credentials_require_complete_put_and_amazon_channel(self):
+        self.authenticate(self.owner_a)
+        url = f"/api/v1/channels/{self.channel_a.id}/amazon-credentials/"
+        incomplete = self.client.put(url, {"seller_id": "missing-token"}, format="json")
+        self.assertEqual(incomplete.status_code, 400)
+
+        ebay_channel = Channel.objects.create(
+            customer=self.customer_a, company=self.company_a, platform=self.ebay,
+            name="eBay manual rejection", country_code="DE",
+        )
+        rejected = self.client.put(f"/api/v1/channels/{ebay_channel.id}/amazon-credentials/", {
+            "seller_id": "seller", "refresh_token": "token",
+        }, format="json")
+        self.assertEqual(rejected.status_code, 400)
 
     def test_woocommerce_requires_https_and_never_returns_consumer_secrets(self):
         self.authenticate(self.owner_a)

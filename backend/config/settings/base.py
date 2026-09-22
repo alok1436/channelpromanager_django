@@ -37,5 +37,11 @@ CELERY_BROKER_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL
 CELERY_TASK_SERIALIZER = "json"
 CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_BEAT_SCHEDULE = {
+    "kaufland-orders-every-five-minutes": {
+        "task": "apps.orders.tasks.schedule_kaufland_orders",
+        "schedule": 300.0,
+    },
+}
 CHANNEL_ENCRYPTION_KEY = os.getenv("CHANNEL_ENCRYPTION_KEY", "")
 PRODUCT_SUPPORTED_LANGUAGES = tuple(code.strip() for code in os.getenv("PRODUCT_SUPPORTED_LANGUAGES", "en,de,fr,it,es,nl").split(",") if code.strip())

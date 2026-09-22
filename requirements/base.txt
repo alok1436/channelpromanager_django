@@ -9,3 +9,5 @@ celery[redis]>=5.4,<6
 redis>=5.2,<6
 gunicorn>=23,<24
 cryptography>=44,<47
+Pillow>=11.1,<12
+python-amazon-sp-api>=2.1.23,<2.2

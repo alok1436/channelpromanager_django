@@ -167,6 +167,7 @@ class ChannelCredentialUpdateSerializer(serializers.Serializer):
     access_token = serializers.CharField(required=False, write_only=True, allow_blank=True)
     access_token_expires_at = serializers.DateTimeField(required=False, write_only=True, allow_null=True)
     client_id = serializers.CharField(required=False, write_only=True)
+    client_key = serializers.CharField(required=False, write_only=True)
     client_secret = serializers.CharField(required=False, write_only=True)
     store_url = serializers.URLField(required=False)
     consumer_key = serializers.CharField(required=False, write_only=True)
@@ -175,6 +176,56 @@ class ChannelCredentialUpdateSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         return validate_credential_payload(self.context["channel"].platform.code, attrs, partial=True)
+
+
+class AmazonManualCredentialSerializer(serializers.Serializer):
+    seller_id = serializers.CharField(max_length=255, trim_whitespace=True)
+    refresh_token = serializers.CharField(write_only=True, trim_whitespace=True)
+
+    def validate(self, attrs):
+        channel = self.context["channel"]
+        if channel.platform.code != "amazon":
+            raise serializers.ValidationError({"channel": "Manual Amazon credentials can only be set on an Amazon channel."})
+        return validate_credential_payload("amazon", attrs, partial=self.context.get("partial", False))
+
+
+class ChannelCredentialStatusSerializer(serializers.Serializer):
+    configured = serializers.BooleanField(read_only=True)
+    platform = serializers.CharField(read_only=True)
+    credential_status = serializers.ChoiceField(choices=("configured", "not_configured"), read_only=True)
+    updated_at = serializers.DateTimeField(read_only=True, allow_null=True)
+
+
+class WooProductImportUploadSerializer(serializers.Serializer):
+    warehouse_id = serializers.IntegerField(min_value=1)
+    language_code = serializers.CharField(max_length=10, default="en")
+    file = serializers.FileField()
+
+    def validate(self, attrs):
+        from apps.warehouses.models import Warehouse
+
+        channel = self.context["channel"]
+        warehouse = Warehouse.objects.filter(pk=attrs["warehouse_id"], customer=channel.customer).first()
+        if warehouse is None:
+            raise serializers.ValidationError({"warehouse_id": "Select a warehouse belonging to this customer."})
+        if attrs["file"].size > 20 * 1024 * 1024 or not attrs["file"].name.lower().endswith(".csv"):
+            raise serializers.ValidationError({"file": "Upload a CSV file no larger than 20 MB."})
+        attrs["warehouse"] = warehouse
+        from apps.products.services.translation_service import normalize_language_code
+
+        attrs["language_code"] = normalize_language_code(attrs["language_code"])
+        return attrs
+
+
+class WooProductImportStatusSerializer(serializers.Serializer):
+    id = serializers.IntegerField(read_only=True)
+    status = serializers.CharField(read_only=True)
+    imported = serializers.IntegerField(read_only=True)
+    platform_products = serializers.IntegerField(read_only=True)
+    skipped = serializers.IntegerField(read_only=True)
+    image_failures = serializers.IntegerField(read_only=True)
+    error = serializers.CharField(read_only=True)
+    completed_at = serializers.DateTimeField(read_only=True)
 
 
 class MarketplaceReplaceSerializer(serializers.Serializer):

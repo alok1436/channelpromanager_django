@@ -133,6 +133,12 @@ class OttoChannelCredential(TimeStampedModel):
     client_secret = models.TextField()
 
 
+class KauflandChannelCredential(TimeStampedModel):
+    channel = models.OneToOneField(Channel, on_delete=models.CASCADE, related_name="kaufland_credentials")
+    client_key = models.TextField()
+    client_secret = models.TextField()
+
+
 class ChannelAuthorizationState(TimeStampedModel):
     customer = models.ForeignKey("customers.Customer", on_delete=models.CASCADE, related_name="channel_authorization_states")
     channel = models.ForeignKey(Channel, on_delete=models.CASCADE, related_name="authorization_states")

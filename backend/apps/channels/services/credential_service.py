@@ -3,6 +3,7 @@ from urllib.parse import urlsplit, urlunsplit
 from django.core.exceptions import ObjectDoesNotExist
 from django.core.validators import URLValidator
 from django.db import transaction
+from django.utils import timezone
 from rest_framework import serializers
 
 from apps.channels.models import (
@@ -10,6 +11,7 @@ from apps.channels.models import (
     CdiscountChannelCredential,
     EbayChannelCredential,
     OttoChannelCredential,
+    KauflandChannelCredential,
     WooCommerceChannelCredential,
     ChannelStatus,
 )
@@ -22,6 +24,7 @@ MODEL_BY_PLATFORM = {
     "cdiscount": CdiscountChannelCredential,
     "woocommerce": WooCommerceChannelCredential,
     "otto": OttoChannelCredential,
+    "kaufland": KauflandChannelCredential,
 }
 RELATED_BY_PLATFORM = {
     "amazon": "amazon_credentials",
@@ -29,6 +32,7 @@ RELATED_BY_PLATFORM = {
     "cdiscount": "cdiscount_credentials",
     "woocommerce": "woocommerce_credentials",
     "otto": "otto_credentials",
+    "kaufland": "kaufland_credentials",
 }
 FIELDS = {
     "amazon": ({"seller_id", "refresh_token"}, {"seller_id", "refresh_token", "access_token", "access_token_expires_at"}),
@@ -36,6 +40,7 @@ FIELDS = {
     "cdiscount": ({"seller_id", "client_id", "client_secret"}, {"seller_id", "client_id", "client_secret"}),
     "woocommerce": ({"store_url", "consumer_key", "consumer_secret"}, {"store_url", "consumer_key", "consumer_secret", "verify_ssl"}),
     "otto": ({"client_id", "client_secret"}, {"client_id", "client_secret"}),
+    "kaufland": ({"client_key", "client_secret"}, {"client_key", "client_secret"}),
 }
 SECRET_FIELDS = {
     "amazon": {"refresh_token", "access_token"},
@@ -43,6 +48,7 @@ SECRET_FIELDS = {
     "cdiscount": {"client_id", "client_secret"},
     "woocommerce": {"consumer_key", "consumer_secret"},
     "otto": {"client_id", "client_secret"},
+    "kaufland": {"client_key", "client_secret"},
 }
 
 
@@ -97,10 +103,22 @@ def set_channel_credentials(channel, payload, partial=False):
     }
     model = MODEL_BY_PLATFORM[platform_code]
     credential, _ = model.objects.update_or_create(channel=channel, defaults=encrypted)
-    if platform_code in {"cdiscount", "woocommerce", "otto"}:
+    if platform_code in {"cdiscount", "woocommerce", "otto", "kaufland"}:
         channel.status = ChannelStatus.ACTIVE
         channel.is_active = True
         channel.save(update_fields=("status", "is_active", "updated_at"))
+    return credential
+
+
+@transaction.atomic
+def set_manual_amazon_credentials(channel, payload, partial=False):
+    if channel.platform.code != "amazon":
+        raise serializers.ValidationError({"channel": "Channel is not an Amazon channel."})
+    credential = set_channel_credentials(channel, payload, partial=partial)
+    channel.status = ChannelStatus.ACTIVE
+    channel.is_active = True
+    channel.authorized_at = timezone.now()
+    channel.save(update_fields=("status", "is_active", "authorized_at", "updated_at"))
     return credential
 
 

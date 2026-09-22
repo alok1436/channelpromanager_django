@@ -24,6 +24,15 @@ MARKETPLACES = {
         ("eBay Netherlands", "ebay_nl", "NL", "EUR", "EBAY_NL", "eu"),
         ("eBay Belgium", "ebay_be", "BE", "EUR", "EBAY_BE", "eu"),
     ),
+    "kaufland": (
+        ("Kaufland Germany", "kaufland_de", "DE", "EUR", "de", "eu"),
+        ("Kaufland Czech Republic", "kaufland_cz", "CZ", "CZK", "cz", "eu"),
+        ("Kaufland Slovakia", "kaufland_sk", "SK", "EUR", "sk", "eu"),
+        ("Kaufland Poland", "kaufland_pl", "PL", "PLN", "pl", "eu"),
+        ("Kaufland Austria", "kaufland_at", "AT", "EUR", "at", "eu"),
+        ("Kaufland France", "kaufland_fr", "FR", "EUR", "fr", "eu"),
+        ("Kaufland Italy", "kaufland_it", "IT", "EUR", "it", "eu"),
+    ),
 }
 
 
@@ -48,4 +57,3 @@ class Command(BaseCommand):
                     },
                 )
         self.stdout.write(self.style.SUCCESS("Channel marketplaces seeded."))
-

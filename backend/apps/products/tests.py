@@ -65,6 +65,21 @@ class ProductAPITests(TestCase):
     def test_anonymous_list_returns_401(self):
         self.assertEqual(self.client.get("/api/v1/products/").status_code, 401)
 
+    def test_customer_product_languages_are_tenant_scoped_and_validated(self):
+        url = "/api/v1/product-language-settings/"
+        self.authenticate(self.owner_a)
+        self.assertEqual(self.client.get(url).data["language_codes"], ["en"])
+        updated = self.client.put(url, {"language_codes": ["en", "it"]}, format="json")
+        self.assertEqual(updated.status_code, 200, updated.data)
+        self.assertEqual(updated.data["language_codes"], ["en", "it"])
+        self.assertEqual(self.client.put(url, {"language_codes": ["en", "EN"]}, format="json").status_code, 400)
+        self.assertEqual(self.client.put(url, {"language_codes": []}, format="json").status_code, 400)
+        self.authenticate(self.owner_b)
+        self.assertEqual(self.client.get(url).data["language_codes"], ["en"])
+        self.authenticate(self.viewer)
+        self.assertEqual(self.client.get(url).status_code, 200)
+        self.assertEqual(self.client.put(url, {"language_codes": ["fr"]}, format="json").status_code, 403)
+
     def test_owner_list_detail_and_language_are_tenant_scoped(self):
         self.authenticate(self.owner_a)
         listed = self.client.get("/api/v1/products/?language=en")

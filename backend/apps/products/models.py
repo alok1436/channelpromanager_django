@@ -177,3 +177,41 @@ class ProductVariantAttribute(TimeStampedModel):
 
     def __str__(self):
         return f"{self.name}: {self.value}"
+
+
+class ProductStock(TimeStampedModel):
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="warehouse_stock")
+    variant = models.ForeignKey(ProductVariant, null=True, blank=True, on_delete=models.CASCADE, related_name="warehouse_stock")
+    warehouse = models.ForeignKey("warehouses.Warehouse", on_delete=models.PROTECT, related_name="product_stock")
+    quantity = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=("product", "warehouse"), condition=Q(variant__isnull=True), name="unique_product_warehouse_stock"),
+            models.UniqueConstraint(fields=("variant", "warehouse"), condition=Q(variant__isnull=False), name="unique_variant_warehouse_stock"),
+        ]
+
+
+class WooProductImport(TimeStampedModel):
+    class Status(models.TextChoices):
+        QUEUED = "queued", "Queued"
+        RUNNING = "running", "Running"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+
+    customer = models.ForeignKey("customers.Customer", on_delete=models.CASCADE, related_name="woo_product_imports")
+    channel = models.ForeignKey("channels.Channel", on_delete=models.PROTECT, related_name="woo_product_imports")
+    warehouse = models.ForeignKey("warehouses.Warehouse", on_delete=models.PROTECT, related_name="woo_product_imports")
+    uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL)
+    source_file = models.FileField(upload_to="woo_product_imports/%Y/%m/%d/")
+    language_code = models.CharField(max_length=10, default="en")
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.QUEUED, db_index=True)
+    imported = models.PositiveIntegerField(default=0)
+    platform_products = models.PositiveIntegerField(default=0)
+    skipped = models.PositiveIntegerField(default=0)
+    image_failures = models.PositiveIntegerField(default=0)
+    error = models.CharField(max_length=255, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ("-created_at",)
